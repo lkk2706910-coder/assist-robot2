@@ -1,0 +1,5 @@
+streamlit
+pandas
+ortools
+workalendar
+st-gsheets-connection
