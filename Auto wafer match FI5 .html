@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>Wafer Visualizer v5.0 Web Final</title>
+    <style>
+        body { font-family: "Microsoft JhengHei", Arial, sans-serif; background: #f4f7f9; display: flex; flex-direction: column; align-items: center; margin: 0; padding: 15px; }
+        .controls { background: white; padding: 12px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); margin-bottom: 10px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; width: 600px; justify-content: center; }
+        canvas { background: white; border-radius: 4px; box-shadow: 0 2px 10px rgba(0,0,0,0.15); cursor: crosshair; }
+        .info-panel { background: #2c3e50; color: #ecf0f1; width: 580px; padding: 12px; border-radius: 4px; margin-top: 10px; font-family: 'Courier New', monospace; font-size: 14px; line-height: 1.5; min-height: 50px; }
+        select, input, button { padding: 6px 10px; border-radius: 4px; border: 1px solid #ddd; font-size: 14px; }
+        button { background: #3498db; color: white; cursor: pointer; border: none; transition: 0.2s; }
+        button:hover { background: #2980b9; }
+        #upload-btn { background: #27ae60; }
+        #upload-btn:hover { background: #219150; }
+        label { font-weight: bold; color: #34495e; }
+    </style>
+</head>
+<body>
+
+<div class="controls">
+    <select id="cass-select"><option>A</option><option>B</option><option>C</option><option>D</option></select>
+    <select id="side-select"><option>S1</option><option>S2</option></select>
+    <select id="st-select"><option>LL</option><option>CHA</option><option>CHB</option><option>CHC</option></select>
+    <label>角度:</label>
+    <input type="number" id="angle-input" value="0" style="width: 60px;">
+    <button onclick="updateAll()">更新介面</button>
+    <input type="file" id="file-input" style="display:none" accept="image/*">
+    <button id="upload-btn" onclick="document.getElementById('file-input').click()">上傳 Wafer Map</button>
+</div>
+
+<canvas id="waferCanvas" width="600" height="700"></canvas>
+
+<div class="info-panel" id="info-panel">
+    載入中...
+</div>
+
+<script>
+    const canvas = document.getElementById('waferCanvas');
+    const ctx = canvas.getContext('2d');
+    const WAFER_R = 45; // 放大後的半徑
+    let baseAngle = 0;
+    let waferImg = null;
+
+    // v5.0 緊湊座標系統 (Y軸上移)
+    const WAFER_POS = {
+        "A2": [245, 55],  "A1": [355, 55],  
+        "B1": [135, 165], "B2": [135, 275],
+        "C2": [465, 165], "C1": [465, 275], 
+        "LL1": [200, 385], "LL2": [400, 385],
+        "CS": [300, 515], 
+        "CA": [150, 640], "CB": [250, 640], "CC": [350, 640], "CD": [450, 640]
+    };
+
+    const MODULE_BOXES = {
+        "CHA": [190, 0, 220, 110], "CHB": [80, 110, 110, 220], "CHC": [410, 110, 110, 220],
+        "MF": [190, 110, 220, 220], "LL": [80, 330, 440, 110], "Cooling": [250, 440, 100, 150],
+        "CassA": [100, 590, 100, 100], "CassB": [200, 590, 100, 100], "CassC": [300, 590, 100, 100], "CassD": [400, 590, 100, 100]
+    };
+
+    function getFullPath(cass, side, station) {
+        let path = ["C" + cass];
+        if ((["A", "B"].includes(cass) && side === "S2") || (["C", "D"].includes(cass) && side === "S1")) path.push("CS");
+        path.push(side === "S1" ? "LL1" : "LL2");
+        if (station !== "LL") {
+            let target = {"CHA":"A", "CHB":"B", "CHC":"C"}[station];
+            path.push(target + (side === "S1" ? "1" : "2"));
+        }
+        return path;
+    }
+
+    function getNodeAngle(node, cass, side, startAngle) {
+        if (["CA", "CB", "CC", "CD"].includes(node)) return startAngle % 360;
+        let rules = {};
+        if (["A", "B"].includes(cass)) {
+            rules = (side === "S1") ? {"LL1": 210, "A1": 30, "B1": 300, "C1": 120, "CS": 0} : {"CS": 300, "LL2": 0, "A2": 180, "B2": 90, "C2": 270};
+        } else {
+            rules = (side === "S1") ? {"CS": 30, "LL1": 0, "A1": 180, "B1": 90, "C1": 270} : {"LL2": 150, "A2": 330, "B2": 240, "C2": 60, "CS": 0};
+        }
+        return ((rules[node] || 0) + startAngle) % 360;
+    }
+
+    // 繪製尖端指向圓心的 Notch
+    function drawNotch(cx, cy, displayAngle) {
+        const notchLen = 6;
+        const rad = (90 + displayAngle) * Math.PI / 180;
+        const edgeX = cx + WAFER_R * Math.cos(rad);
+        const edgeY = cy + WAFER_R * Math.sin(rad);
+        const p1X = cx + (WAFER_R - notchLen) * Math.cos(rad);
+        const p1Y = cy + (WAFER_R - notchLen) * Math.sin(rad);
+        
+        const dx = Math.cos(rad);
+        const dy = Math.sin(rad);
+        const widthOffset = 4;
+
+        ctx.fillStyle = "red";
+        ctx.beginPath();
+        ctx.moveTo(p1X, p1Y); // 頂點朝中心
+        ctx.lineTo(edgeX + widthOffset * dy, edgeY - widthOffset * dx);
+        ctx.lineTo(edgeX - widthOffset * dy, edgeY + widthOffset * dx);
+        ctx.closePath();
+        ctx.fill();
+    }
+
+    function updateAll() {
+        const cass = document.getElementById('cass-select').value;
+        const side = document.getElementById('side-select').value;
+        const station = document.getElementById('st-select').value;
+        baseAngle = parseInt(document.getElementById('angle-input').value) || 0;
+        const path = getFullPath(cass, side, station);
+
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // 繪製背景框架
+        ctx.strokeStyle = "#DDD";
+        ctx.lineWidth = 1;
+        for (let m in MODULE_BOXES) {
+            let [x, y, w, h] = MODULE_BOXES[m];
+            ctx.strokeRect(x, y, w, h);
+            ctx.fillStyle = "#3498db";
+            ctx.font = "bold 11px Arial";
+            ctx.textAlign = "left";
+            ctx.fillText(m, x + 5, y + 15);
+        }
+
+        // 遍歷所有站點繪製 Wafer
+        for (let name in WAFER_POS) {
+            let [cx, cy] = WAFER_POS[name];
+            let angle = getNodeAngle(name, cass, side, baseAngle);
+            let displayAngle = (180 + angle) % 360; 
+            let isInPath = path.includes(name);
+
+            // 1. 基底圓圈
+            ctx.beginPath();
+            ctx.arc(cx, cy, WAFER_R, 0, Math.PI * 2);
+            ctx.fillStyle = isInPath ? "#FFFFFF" : "#F0FFFF";
+            ctx.fill();
+            ctx.strokeStyle = isInPath ? "#FF4757" : "#BDC3C7";
+            ctx.lineWidth = isInPath ? 2 : 1;
+            ctx.stroke();
+
+            // 2. 圖片旋轉邏輯 (修正版：先位移、再旋轉、後繪圖)
+            if (isInPath && waferImg) {
+                ctx.save();
+                ctx.translate(cx, cy); 
+                // HTML Canvas 順時針轉，Python 是逆時針，此處使用正值以匹配 Notch
+                ctx.rotate(displayAngle * Math.PI / 180); 
+                ctx.drawImage(waferImg, -WAFER_R, -WAFER_R, WAFER_R * 2, WAFER_R * 2);
+                ctx.restore();
+            } else {
+                ctx.fillStyle = "#2C3E50";
+                ctx.font = "bold 12px Arial";
+                ctx.textAlign = "center";
+                ctx.fillText(name, cx, cy + 5);
+            }
+
+            // 3. 繪製 Notch
+            drawNotch(cx, cy, displayAngle);
+
+            // 4. 路徑標示 (紅圈與角度文字)
+            if (isInPath) {
+                ctx.beginPath();
+                ctx.arc(cx, cy, WAFER_R + 5, 0, Math.PI * 2);
+                ctx.strokeStyle = "red";
+                ctx.lineWidth = 2.5;
+                ctx.stroke();
+                
+                ctx.fillStyle = "red";
+                ctx.font = "bold 13px Arial";
+                ctx.textAlign = "center";
+                ctx.fillText(angle + "°", cx, cy - WAFER_R - 12);
+            }
+        }
+
+        // 更新資訊欄位
+        const pathStr = path.map(n => `${n}(${getNodeAngle(n, cass, side, baseAngle)}°)`).join(" → ");
+        document.getElementById('info-panel').innerHTML = `<strong>[進站角度]</strong>: ${baseAngle}°<br><strong>[路徑順序]</strong>: ${pathStr}`;
+    }
+
+    // 處理圖片上傳
+    document.getElementById('file-input').onchange = function(e) {
+        if (!e.target.files[0]) return;
+        const reader = new FileReader();
+        reader.onload = function(event) {
+            const tempImg = new Image();
+            tempImg.onload = function() {
+                waferImg = tempImg;
+                updateAll();
+            };
+            tempImg.src = event.target.result;
+        };
+        reader.readAsDataURL(e.target.files[0]);
+    };
+
+    // 初始繪製
+    window.onload = updateAll;
+</script>
+</body>
+</html>
