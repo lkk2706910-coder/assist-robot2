@@ -29,6 +29,11 @@ week_list = ["禮拜一", "禮拜二", "禮拜三", "禮拜四", "禮拜五", "�
 week_map = {w: i for i, w in enumerate(week_list)}
 
 def get_ab_shift(target_date: date) -> str:
+    """
+    A/B 班判定：
+    - 2026-01-01 = B班
+    - 接著每兩天換一次 A/B，循環
+    """
     base_date = date(2026, 1, 1)
     delta_days = (target_date - base_date).days
     if delta_days < 0:
@@ -74,14 +79,22 @@ with st.sidebar:
     sel_month = st.selectbox("月份", range(1, 13), index=date.today().month - 1)
     last_day_val = calendar.monthrange(sel_year, sel_month)[1]
 
-    # 偏好
+    # 偏好：人員 / 類型(平日/假日) / 限定班別(不值班/A班/B班)
     with st.expander("📝 編輯偏好"):
         edited_pref = st.data_editor(
             st.session_state.pref_data,
             num_rows="dynamic",
             key="p_editor",
             column_config={
-                "人員": st.column_config.SelectboxColumn(options=all_staff, required=True)
+                "人員": st.column_config.SelectboxColumn(options=all_staff, required=True),
+                "類型": st.column_config.SelectboxColumn(
+                    options=["平日", "假日"],
+                    required=True
+                ),
+                "限定班別": st.column_config.SelectboxColumn(
+                    options=["不值班", "A班", "B班"],
+                    required=True
+                ),
             },
         )
 
@@ -318,29 +331,43 @@ def solve_schedule(year, month, g1_cfg, g2_cfg, p_df, m_df, l_df):
                         model.Add(x[(row["人員"], d, 0)] == 0)
                         model.Add(x[(row["人員"], d, 1)] == 0)
 
-    # F. 偏好：限定班別（只限制「日班」，平日與假日都受影響，大夜不受影響）
+    # F. 偏好：平日 / 假日 + 不值班 / A班 / B班
+    #    只限制「日班 (s=0)」，大夜 (s=1) 完全不受影響
 
-    # p_df 欄位預期：人員 / 類型 / 限定班別
-    # 「限定班別」填 A班 或 B班，表示該人「只在 A/B 班日可以排日班（含平日與假日）」
-    if not p_df.empty and {"人員", "限定班別"}.issubset(p_df.columns):
-        limit_map = {}  # e -> "A班" / "B班"
-        for _, row in p_df.dropna(subset=["人員", "限定班別"]).iterrows():
+    if not p_df.empty and {"人員", "類型", "限定班別"}.issubset(p_df.columns):
+        # 可能同一個人有多筆設定（平日一筆、假日一筆），逐筆處理
+        for _, row in p_df.dropna(subset=["人員", "類型", "限定班別"]).iterrows():
             person = row["人員"]
-            shift_limit = row["限定班別"]
-            # 若同一個人有多筆，就以最後一筆為主
-            limit_map[person] = shift_limit
+            p_type = row["類型"]       # "平日" 或 "假日"
+            limit = row["限定班別"]    # "不值班" / "A班" / "B班"
 
-        for e, limit in limit_map.items():
-            if limit not in ["A班", "B班"]:
+            if person not in all_staff:
+                continue
+
+            # 選擇要管的日期集合
+            if p_type == "平日":
+                target_days = w_set
+            elif p_type == "假日":
+                target_days = h_set
+            else:
                 continue  # 其他值不處理
 
-            for d in days:
-                curr_date = date(year, month, d)
-                ab = get_ab_shift(curr_date)  # "A班" 或 "B班"
-                # 若這天的班別 != 員工限定的班別，只禁止「日班」
-                #（平日與假日的日班都會用這個變數 x[(e, d, 0)]）
-                if ab != limit:
-                    model.Add(x[(e, d, 0)] == 0)
+            # 1) 不值班：這個人對應日期的「日班」全部關掉
+            if limit == "不值班":
+                for d in target_days:
+                    model.Add(x[(person, d, 0)] == 0)
+                continue
+
+            # 2) A班 / B班：只允許對應 A/B 班日排日班，其它班別的日班關掉
+            if limit in ["A班", "B班"]:
+                for d in target_days:
+                    curr_date = date(year, month, d)
+                    ab = get_ab_shift(curr_date)  # "A班" 或 "B班"
+                    if ab != limit:
+                        # 這天不是指定的 A/B → 禁止日班
+                        model.Add(x[(person, d, 0)] == 0)
+                continue
+            # 其他值忽略
 
     # 目標：最小化 soft_penalties
     model.Maximize(-sum(soft_penalties))
