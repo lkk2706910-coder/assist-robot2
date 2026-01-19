@@ -13,7 +13,15 @@ import calendar
 from streamlit_gsheets import GSheetsConnection
 
 import time
-
+import streamlit as st
+from streamlit_gsheets import GSheetsConnection
+# 建議放在程式開頭
+try:
+   # 直接初始化，不要傳入參數，Streamlit 會自動去 Secrets 找 [connections.gsheets]
+   conn = st.connection("gsheets", type=GSheetsConnection)
+except Exception as e:
+   st.error(f"❌ 雲端連線失敗，請檢查 Secrets 設定。錯誤訊息: {e}")
+   st.stop()
 # --- 1. 基礎設定 ---
 
 st.set_page_config(page_title="🏥 智慧排班系統", layout="wide")
@@ -340,3 +348,4 @@ if st.button("🚀 執行優化排班"):
 
         st.error("❌ 無法找到符合所有限制的排法。")
  
+
