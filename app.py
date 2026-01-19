@@ -318,6 +318,30 @@ def solve_schedule(year, month, g1_cfg, g2_cfg, p_df, m_df, l_df):
                         model.Add(x[(row["人員"], d, 0)] == 0)
                         model.Add(x[(row["人員"], d, 1)] == 0)
 
+    # F. 偏好：限定班別（只限制「日班」，平日與假日都受影響，大夜不受影響）
+
+    # p_df 欄位預期：人員 / 類型 / 限定班別
+    # 「限定班別」填 A班 或 B班，表示該人「只在 A/B 班日可以排日班（含平日與假日）」
+    if not p_df.empty and {"人員", "限定班別"}.issubset(p_df.columns):
+        limit_map = {}  # e -> "A班" / "B班"
+        for _, row in p_df.dropna(subset=["人員", "限定班別"]).iterrows():
+            person = row["人員"]
+            shift_limit = row["限定班別"]
+            # 若同一個人有多筆，就以最後一筆為主
+            limit_map[person] = shift_limit
+
+        for e, limit in limit_map.items():
+            if limit not in ["A班", "B班"]:
+                continue  # 其他值不處理
+
+            for d in days:
+                curr_date = date(year, month, d)
+                ab = get_ab_shift(curr_date)  # "A班" 或 "B班"
+                # 若這天的班別 != 員工限定的班別，只禁止「日班」
+                #（平日與假日的日班都會用這個變數 x[(e, d, 0)]）
+                if ab != limit:
+                    model.Add(x[(e, d, 0)] == 0)
+
     # 目標：最小化 soft_penalties
     model.Maximize(-sum(soft_penalties))
 
