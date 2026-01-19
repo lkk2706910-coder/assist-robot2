@@ -191,7 +191,7 @@ def solve_schedule(year, month, g1_cfg, g2_cfg, p_df, m_df, l_df):
     # A. 大夜班固定邏輯
 
     staff_night_count = {e: 0 for e in all_staff}
-    # 紀錄每個人在「大夜相關期間（大夜前2天 ~ 後2天）」的所有日期
+    # 紀錄每個人在「大夜相關期間（大夜前3天 ~ 後3天）」的所有日期
     night_period_days = {e: set() for e in all_staff}
 
     for d in days:
@@ -222,13 +222,13 @@ def solve_schedule(year, month, g1_cfg, g2_cfg, p_df, m_df, l_df):
             model.Add(x[(dn, d, 1)] == 1)
             model.Add(x[(dn, d, 0)] == 0)
 
-            # 大夜前2天 ~ 後2天，全部視為「大夜相關期間」，禁止日班
-            for offset in range(-2, 3):  # -2, -1, 0, +1, +2
+            # 大夜前3天 ~ 後3天，全部視為「大夜相關期間」，禁止日班
+            for offset in range(-3, 4):  # -3, -2, -1, 0, +1, +2, +3
                 dd = d + offset
                 if 1 <= dd <= last_day:
                     night_period_days[dn].add(dd)
 
-    # 大夜相關期間（前2天~後2天），一律不能上日班（不管平日/假日）
+    # 大夜相關期間（前3天~後3天），一律不能上日班（不管平日/假日）
     for e in all_staff:
         for d in night_period_days[e]:
             model.Add(x[(e, d, 0)] == 0)
