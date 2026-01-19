@@ -93,7 +93,7 @@ with st.sidebar:
             key="m_editor",
             column_config={
                 "人員": st.column_config.SelectboxColumn(options=all_staff, required=True),
-                # 如果你的 Sheet 裡「開會時間」是一個星期文字，建議用 Selectbox
+                # 若「開會時間」是星期文字，可以改用下列設定
                 # "開會時間": st.column_config.SelectboxColumn(options=week_list, required=True),
             },
         )
@@ -188,14 +188,17 @@ def solve_schedule(year, month, g1_cfg, g2_cfg, p_df, m_df, l_df):
     h_set = set(holidays)
     w_set = set(days) - h_set
 
-    # A. 大夜班固定邏輯（兩組輪值）
+    # A. 大夜班固定邏輯（兩組輪值，並套用做2休2「期間禁日班」）
+
     staff_night_count = {e: 0 for e in all_staff}
+    # 紀錄每個人在「大夜班作息期間（做2休2）」的所有日期
+    night_period_days = {e: set() for e in all_staff}
 
     for d in days:
         curr = date(year, month, d)
         dn = None
 
-        # 記得 g1_cfg['p'] / g2_cfg['p'] 可能是空的，要先檢查長度
+        # 第一組
         if (
             len(g1_cfg["p"]) > 0
             and len(g1_cfg["r"]) == 2
@@ -203,6 +206,7 @@ def solve_schedule(year, month, g1_cfg, g2_cfg, p_df, m_df, l_df):
         ):
             idx = ((curr - g1_cfg["r"][0]).days // 2) % len(g1_cfg["p"])
             dn = g1_cfg["p"][idx]
+        # 第二組
         elif (
             len(g2_cfg["p"]) > 0
             and len(g2_cfg["r"]) == 2
@@ -213,18 +217,29 @@ def solve_schedule(year, month, g1_cfg, g2_cfg, p_df, m_df, l_df):
 
         if dn:
             staff_night_count[dn] += 1
+
             # 當日一定大夜，不得日班
             model.Add(x[(dn, d, 1)] == 1)
             model.Add(x[(dn, d, 0)] == 0)
-            # 隔天不得日班
-            if d < last_day:
-                model.Add(x[(dn, d + 1, 0)] == 0)
+
+            # 做2休2：假設大夜是連值 2 天，後面休 2 天
+            # 這裡：大夜那 2 天 + 後面 2 天，全都視為「大夜作息期間」→ 禁日班
+            for offset in range(0, 4):  # 當天 + 後 3 天
+                dd = d + offset
+                if 1 <= dd <= last_day:
+                    night_period_days[dn].add(dd)
+
+    # 大夜班作息期間，一律不能上日班（不管平日/假日）
+    for e in all_staff:
+        for d in night_period_days[e]:
+            model.Add(x[(e, d, 0)] == 0)
 
     # 每天一定剛好一位大夜
     for d in days:
         model.Add(sum(x[(e, d, 1)] for e in all_staff) == 1)
 
     # B. 平假日分配公平（最多 3 天，1~2 天優先）
+
     soft_penalties = []
 
     for e in all_staff:
@@ -269,8 +284,8 @@ def solve_schedule(year, month, g1_cfg, g2_cfg, p_df, m_df, l_df):
         model.Add(w_cnt <= 3)
         model.Add(h_cnt <= 3)
 
-    # C. 日值班規則
-    # 平日 1 人日值班，假日 2 人日值班
+    # C. 日值班規則：平日 1 人，假日 2 人
+
     for d in days:
         need = 2 if d in h_set else 1
         model.Add(sum(x[(e, d, 0)] for e in all_staff) == need)
@@ -281,9 +296,9 @@ def solve_schedule(year, month, g1_cfg, g2_cfg, p_df, m_df, l_df):
             model.Add(x[(e, d, 0)] + x[(e, d + 1, 0)] <= 1)
 
     # D. 固定會議：該星期幾不能日班
+
     if not m_df.empty and "人員" in m_df.columns:
         for _, row in m_df.dropna(subset=["人員"]).iterrows():
-            # 注意：確保這裡的欄位名稱與 Sheet 一致
             day_str = row.get("開會時間", None)
             wd = week_map.get(day_str)
             if wd is not None:
@@ -292,6 +307,7 @@ def solve_schedule(year, month, g1_cfg, g2_cfg, p_df, m_df, l_df):
                         model.Add(x[(row["人員"], d, 0)] == 0)
 
     # E. 休假：該日期不能排日班也不能排大夜
+
     if not l_df.empty and {"人員", "開始日期", "結束日期"}.issubset(l_df.columns):
         for _, row in l_df.dropna(subset=["人員"]).iterrows():
             if pd.notnull(row["開始日期"]) and pd.notnull(row["結束日期"]):
