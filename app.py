@@ -8,7 +8,7 @@ from streamlit_gsheets import GSheetsConnection
 import time
 
 # --- 1. 基礎設定與連線 ---
-st.set_page_config(page_title="🏥 智慧排班系統", layout="wide")
+st.set_page_config(page_title="智慧排班系統", layout="wide")
 
 try:
     conn = st.connection("gsheets", type=GSheetsConnection)
@@ -260,3 +260,4 @@ else:
         else:
 
             st.error("❌ 找不到可行方案。請檢查休假是否過於集中。")
+
