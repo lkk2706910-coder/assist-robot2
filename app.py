@@ -234,7 +234,7 @@ else:
                     "日期": f"{sel_month}/{d}",
                     "星期": week_list[curr.weekday()],
                     "大夜班": "".join([e for e in current_staff_list if solver.Value(x[(e, d, 1)])]),
-                    "日值班": " & ".join([e for e in current_staff_list if solver.Value(x[(e, d, 0)])]),
+                    "日值班": " \ ".join([e for e in current_staff_list if solver.Value(x[(e, d, 0)])]),
                     "班別": get_ab_shift(curr)
                 })
             df_res = pd.DataFrame(res)
@@ -258,4 +258,5 @@ else:
             } for e in current_staff_list]
             st.dataframe(pd.DataFrame(stats), use_container_width=True)
         else:
+
             st.error("❌ 找不到可行方案。請檢查休假是否過於集中。")
