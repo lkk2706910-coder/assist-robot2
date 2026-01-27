@@ -53,6 +53,14 @@ if "data_loaded" not in st.session_state:
     st.session_state.holiday_data = h
     st.session_state.data_loaded = True
 
+# 初始化排班結果快取
+if "df_res" not in st.session_state:
+    st.session_state.df_res = None
+if "df_stats" not in st.session_state:
+    st.session_state.df_stats = None
+if "h_set" not in st.session_state:
+    st.session_state.h_set = set()
+
 current_staff_list = sorted([n.strip() for n in st.session_state.staff_df["姓名"].tolist() if n.strip()])
 
 # --- 3. 側邊欄 UI ---
@@ -197,12 +205,13 @@ def solve_schedule(year, month, staff_list, g1_cfg, g2_cfg, p_df, m_df, l_df, h_
     solver.parameters.max_time_in_seconds = 15.0
     return solver, solver.Solve(model), x, last_day, h_set, w_set
 
-# --- 5. 主畫面 ---
+# --- 5. 主畫面與顯示邏輯 ---
 st.header(f"🏥 {sel_year}年 {sel_month}月 班表生成系統")
 
 if not current_staff_list:
     st.info("💡 請先在左側『名單管理』填入人員並儲存。")
 else:
+    # 第一步：觸發排班計算
     if st.button("🚀 執行優化排班"):
         solver, status, x, last_day, h_set, w_set = solve_schedule(
             sel_year, sel_month, current_staff_list, 
@@ -212,7 +221,6 @@ else:
         )
 
         if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
-            # 建立班表結果
             res = []
             for d in range(1, last_day + 1):
                 curr = date(sel_year, sel_month, d)
@@ -223,50 +231,63 @@ else:
                     "日值班": " \ ".join([e for e in current_staff_list if solver.Value(x[(e, d, 0)])]),
                     "班別": get_ab_shift(curr)
                 })
-            df_res = pd.DataFrame(res)
-
-            # 建立統計結果
+            
             stats = [{
                 "人員": e,
                 "平日值班": sum(solver.Value(x[(e, d, 0)]) for d in w_set),
                 "假日值班": sum(solver.Value(x[(e, d, 0)]) for d in h_set),
                 "大夜總數": sum(solver.Value(x[(e, d, 1)]) for d in range(1, last_day+1))
             } for e in current_staff_list]
-            df_stats = pd.DataFrame(stats)
 
-            # 顯示 UI
-            def highlight_holiday(row):
-                day_num = int(row["日期"].split("/")[-1])
-                return ["background-color: #FFF9C4"] * len(row) if day_num in h_set else [""] * len(row)
-
-            st.subheader("🗓️ 排班結果明細")
-            st.write(df_res.style.apply(highlight_holiday, axis=1).to_html(), unsafe_allow_html=True)
-            
-            st.subheader("📊 本月統計")
-            st.dataframe(df_stats, use_container_width=True)
-
-            # --- 雲端上傳功能 ---
-            st.divider()
-            sheet_title = f"{sel_year}年{sel_month}月班表_{datetime.now().strftime('%m%d_%H%M')}"
-            if st.button("📤 一鍵同步班表與統計至 Google Sheets"):
-                try:
-                    with st.spinner("正在整合資料並建立工作表..."):
-                        # 合併班表與統計
-                        empty_sep = pd.DataFrame([[""] * 5], columns=df_res.columns)
-                        stat_header = pd.DataFrame([["--- 本月出勤統計 ---", "", "", "", ""]], columns=df_res.columns)
-                        # 對齊統計表欄位以便合併
-                        df_stats_aligned = df_stats.copy()
-                        df_stats_aligned.columns = df_res.columns[:4]
-                        
-                        combined_df = pd.concat([df_res, empty_sep, stat_header, df_stats_aligned], ignore_index=True)
-                        
-                        conn.create(worksheet=sheet_title, data=combined_df)
-                        st.success(f"✅ 上傳成功！工作表名稱：{sheet_title}")
-                except Exception as e:
-                    st.error(f"上傳失敗: {e}")
-            st.divider()
+            # 將結果存入快取，避免點擊上傳按鈕時資料消失
+            st.session_state.df_res = pd.DataFrame(res)
+            st.session_state.df_stats = pd.DataFrame(stats)
+            st.session_state.h_set = h_set
+            st.success("✅ 排班生成完成！")
         else:
             st.error("❌ 找不到可行方案。請檢查休假或會議是否過於集中。")
+            st.session_state.df_res = None
 
-# --- 互動 Next Step ---
-# Would you like me to add a download button for Excel format as well?
+    # 第二步：顯示已生成的排班結果與上傳按鈕
+    if st.session_state.df_res is not None:
+        df_res = st.session_state.df_res
+        df_stats = st.session_state.df_stats
+        h_set = st.session_state.h_set
+
+        def highlight_holiday(row):
+            day_num = int(row["日期"].split("/")[-1])
+            return ["background-color: #FFF9C4"] * len(row) if day_num in h_set else [""] * len(row)
+
+        st.subheader("🗓️ 排班結果明細")
+        st.write(df_res.style.apply(highlight_holiday, axis=1).to_html(), unsafe_allow_html=True)
+        
+        st.subheader("📊 本月統計")
+        st.dataframe(df_stats, use_container_width=True)
+
+        # --- 雲端上傳功能 ---
+        st.divider()
+        sheet_title = f"{sel_year}年{sel_month}月班表_{datetime.now().strftime('%m%d_%H%M')}"
+        
+        if st.button("📤 一鍵同步班表與統計至 Google Sheets"):
+            try:
+                with st.spinner("正在整合資料並建立工作表..."):
+                    # 準備合併資料
+                    # 建立空行與統計標題行 (確保欄位數量與 df_res 相同為 5 欄)
+                    empty_sep = pd.DataFrame([[""] * 5], columns=df_res.columns)
+                    stat_header = pd.DataFrame([["--- 本月出勤統計 ---", "", "", "", ""]], columns=df_res.columns)
+                    
+                    # 格式化統計表以符合合併寬度
+                    df_stats_aligned = df_stats.copy()
+                    # 將統計表的 4 欄對應到明細表的前 4 欄
+                    df_stats_aligned.columns = df_res.columns[:4]
+                    
+                    # 拼接所有 DataFrame
+                    combined_df = pd.concat([df_res, empty_sep, stat_header, df_stats_aligned], ignore_index=True)
+                    
+                    # 呼叫 streamlit-gsheets 的 create 方法
+                    conn.create(worksheet=sheet_title, data=combined_df)
+                    st.success(f"✅ 上傳成功！工作表名稱為：{sheet_title}")
+                    
+            except Exception as e:
+                st.error(f"上傳過程發生錯誤: {e}")
+        st.divider()
