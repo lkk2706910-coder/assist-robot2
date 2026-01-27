@@ -238,6 +238,25 @@ else:
                     "班別": get_ab_shift(curr)
                 })
             df_res = pd.DataFrame(res)
+                # --- 將排班結果寫入 Google Sheet ---
+    try:
+        with st.spinner("📤 正在將排班結果同步到 Google Sheet..."):
+            # 方式一：每個年月一個 worksheet
+            ws_name = f"schedule_{sel_year}_{sel_month:02d}"
+
+            # 若希望保留原始日期型態也可以另外加一欄真正的日期
+            df_save = df_res.copy()
+            df_save["年份"] = sel_year
+            df_save["月份"] = sel_month
+
+            conn.update(
+                worksheet=ws_name,
+                data=df_save.reset_index(drop=True)
+            )
+        st.success(f"✅ 排班結果已寫入 Google Sheet 工作表：{ws_name}")
+    except Exception as e:
+        st.error(f"❌ 排班結果寫入 Google Sheet 失敗：{e}")
+
             
             # --- 修正後的表格高亮邏輯 ---
             def highlight_holiday(row):
@@ -260,4 +279,5 @@ else:
         else:
 
             st.error("❌ 找不到可行方案。請檢查休假是否過於集中。")
+
 
